@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Messaging - Terminal Style</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
+    <style>
+        * {
+            font-family: 'Courier New', Courier, monospace;
+        }
+        body {
+            background-color: #000000;
+            color: #9d7ceb;
+        }
+        .terminal-border {
+            border: 1px solid #7c5aa6;
+        }
+        .terminal-input {
+            background-color: #1a1a1a;
+            color: #9d7ceb;
+            border: 1px solid #7c5aa6;
+            caret-color: #9d7ceb;
+        }
+        .terminal-input:focus {
+            outline: none;
+            border-color: #9d7ceb;
+            box-shadow: 0 0 10px rgba(157, 124, 235, 0.3);
+        }
+        .message-sent {
+            background-color: #2a2a3a;
+            color: #9d7ceb;
+        }
+        .message-delivered {
+            color: #7c5aa6;
+            font-size: 0.75rem;
+        }
+        .status-sent {
+            color: #7c5aa6;
+        }
+        .status-delivered {
+            color: #5a3d8a;
+        }
+        .button-primary {
+            background-color: #5a3d8a;
+            color: #9d7ceb;
+            border: 1px solid #7c5aa6;
+        }
+        .button-primary:hover {
+            background-color: #7c5aa6;
+            cursor: pointer;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #2a2a3a;
+            border: 1px solid #7c5aa6;
+            padding: 15px;
+            border-radius: 0;
+            z-index: 1000;
+            max-width: 300px;
+        }
+        .command-hint {
+            color: #5a3d8a;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body class="bg-black text-terminal-lavender">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // ==================== Firebase Configuration ====================
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "your-app.firebaseapp.com",
+            projectId: "your-project-id",
+            storageBucket: "your-app.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcd1234"
+        };
+        // UPDATE THE ABOVE WITH YOUR FIREBASE CONFIG!
+
+        // Initialize Firebase
+        let firebase, auth, db;
+        try {
+            firebase = window.firebase || {};
+            if (firebase.initializeApp) {
+                firebase.initializeApp(firebaseConfig);
+                auth = firebase.auth();
+                db = firebase.firestore();
+            }
+        } catch (error) {
+            console.log("Firebase error:", error.message);
+        }
+
+        // ==================== Utility Functions ====================
+        function generateUsername() {
+            const animals = ['ghost', 'shadow', 'cipher', 'echo', 'pixel', 'nova', 'void', 'frost', 'spark', 'drift'];
+            const animal = animals[Math.floor(Math.random() * animals.length)];
+            const number = Math.floor(Math.random() * 9000) + 1000;
+            return `${animal}_${number}`;
+        }
+
+        function generateInviteCode() {
+            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+
+        function isMessageExpired(timestamp) {
+            if (!timestamp) return false;
+            const messageDate = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+            const now = new Date();
+            const hoursDiff = (now - messageDate) / (1000 * 60 * 60);
+            return hoursDiff > 24;
+        }
+
+        function formatTime(timestamp) {
+            if (!timestamp) return '';
+            const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        // ==================== Components ====================
+        function Login({ onAuthSuccess }) {
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            const handleGoogleLogin = async () => {
+                if (!auth) {
+                    alert('❌ Firebase not configured.\nUpdate firebaseConfig in the HTML file with your Firebase credentials.');
+                    return;
+                }
+                try {
+                    setLoading(true);
+                    const provider = new firebase.auth.GoogleAuthProvider();
+                    const result = await auth.signInWithPopup(provider);
+                    
+                    const userRef = db.collection('users').doc(result.user.uid);
+                    const userDoc = await userRef.get();
+                    
+                    if (!userDoc.exists) {
+                        const username = generateUsername();
+                        await userRef.set({
+                            uid: result.user.uid,
+                            username: username,
+                            createdAt: new Date(),
+                            inviteCode: generateInviteCode()
+                        });
+                    }
+                    
+                    onAuthSuccess(result.user);
+                } catch (err) {
+                    setError(err.message);
+                }
+                setLoading(false);
+            };
+
+            return (
+                <div className="min-h-screen bg-black flex items-center justify-center">
+                    <div className="terminal-border p-8 w-full max-w-md">
+                        <h1 className="text-2xl text-terminal-lavender mb-8 text-center font-bold">
+                            &gt; MINIMAL MESSAGING
+                        </h1>
+                        
+                        <div className="mb-6 text-terminal-lavender text-sm">
+                            <p className="mb-4">&gt; SECURE TEXT RELAY SYSTEM</p>
+                            <p className="text-purple-400 text-xs">&gt; Plain text only. Auto-delete after 24h.</p>
+                        </div>
+
+                        {error && (
+                            <div className="terminal-border bg-gray-900 p-3 mb-4 text-red-500 text-sm">
+                                ERROR: {error}
+                            </div>
+                        )}
+
+                        <button
+                            onClick={handleGoogleLogin}
+                            disabled={loading}
+                            className="button-primary w-full py-3 mb-4 font-bold hover:bg-purple-600"
+                        >
+                            {loading ? '> CONNECTING...' : '> LOGIN WITH GOOGLE'}
+                        </button>
+
+                        <div className="text-xs text-purple-400 mt-4 text-center">
+                            <p>&gt; Secure authentication via Firebase</p>
+                            <p>&gt; Your email is never shared</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function UserSearch({ currentUsername, onSelectUser }) {
+            const [searchInput, setSearchInput] = useState('');
+            const [searchResults, setSearchResults] = useState([]);
+            const [inviteInput, setInviteInput] = useState('');
+
+            const handleSearch = async (value) => {
+                setSearchInput(value);
+                if (!value.trim() || !db) {
+                    setSearchResults([]);
+                    return;
+                }
+
+                try {
+                    const snapshot = await db.collection('users')
+                        .where('username', '==', value.trim().toLowerCase())
+                        .get();
+                    
+                    const results = snapshot.docs
+                        .map(doc => doc.data())
+                        .filter(user => user.username !== currentUsername);
+                    
+                    setSearchResults(results);
+                } catch (err) {
+                    console.error('Search error:', err);
+                }
+            };
+
+            const handleInviteCode = async () => {
+                if (!inviteInput.trim() || !db) return;
+                try {
+                    const snapshot = await db.collection('users')
+                        .where('inviteCode', '==', inviteInput.trim().toUpperCase())
+                        .get();
+                    
+                    if (snapshot.docs.length > 0) {
+                        const user = snapshot.docs[0].data();
+                        onSelectUser(user);
+                    } else {
+                        alert('Invite code not found');
+                    }
+                } catch (err) {
+                    console.error('Invite error:', err);
+                }
+            };
+
+            return (
+                <div className="mb-6">
+                    <div className="text-xs text-purple-400 mb-2">&gt; START NEW CHAT</div>
+                    
+                    <div className="mb-3">
+                        <input
+                            type="text"
+                            placeholder="Search username..."
+                            value={searchInput}
+                            onChange={(e) => handleSearch(e.target.value)}
+                            className="terminal-input w-full px-3 py-2 text-sm mb-2"
+                        />
+                        {searchResults.length > 0 && (
+                            <div className="terminal-border bg-gray-900">
+                                {searchResults.map((user, i) => (
+                                    <button
+                                        key={i}
+                                        onClick={() => {
+                                            onSelectUser(user);
+                                            setSearchInput('');
+                                            setSearchResults([]);
+                                        }}
+                                        className="w-full text-left px-3 py-2 hover:bg-gray-800 text-sm"
+                                    >
+                                        {user.username}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="text-xs text-purple-400 mb-2">&gt; OR USE INVITE CODE</div>
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            placeholder="Enter invite code..."
+                            value={inviteInput}
+                            onChange={(e) => setInviteInput(e.target.value.toUpperCase())}
+                            maxLength="6"
+                            className="terminal-input flex-1 px-3 py-2 text-sm"
+                        />
+                        <button
+                            onClick={handleInviteCode}
+                            className="button-primary px-4 py-2 text-sm hover:bg-purple-600"
+                        >
+                            JOIN
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        function MessageList({ messages, currentUserId }) {
+            const messagesEndRef = useRef(null);
+
+            useEffect(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [messages]);
+
+            const visibleMessages = messages.filter(msg => !isMessageExpired(msg.createdAt));
+
+            return (
+                <div className="flex-1 overflow-y-auto mb-4 p-4 space-y-2 max-h-96 border border-purple-600 bg-black">
+                    {visibleMessages.length === 0 ? (
+                        <div className="text-purple-400 text-sm text-center mt-8">
+                            &gt; NO MESSAGES YET
+                        </div>
+                    ) : (
+                        visibleMessages.map((msg, i) => (
+                            <div key={i} className="text-sm">
+                                <div className="message-sent p-2">
+                                    <div className="flex justify-between items-start">
+                                        <span className="text-purple-300">
+                                            {msg.senderId === currentUserId ? 'YOU' : 'THEM'}:
+                                        </span>
+                                        <span className="message-delivered ml-2">
+                                            {formatTime(msg.createdAt)}
+                                        </span>
+                                    </div>
+                                    <div className="mt-1 break-words">
+                                        {msg.text}
+                                    </div>
+                                    <div className={`text-xs mt-1 ${msg.status === 'delivered' ? 'status-delivered' : 'status-sent'}`}>
+                                        [{msg.status}]
+                                    </div>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                    <div ref={messagesEndRef} />
+                </div>
+            );
+        }
+
+        function InputBox({ onSendMessage, onCommand }) {
+            const [input, setInput] = useState('');
+            const inputRef = useRef(null);
+
+            const handleKeyPress = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit();
+                }
+            };
+
+            const handleSubmit = () => {
+                const text = input.trim();
+                if (!text) return;
+
+                if (text.startsWith('/')) {
+                    const command = text.split(' ')[0];
+                    if (command === '/clear') {
+                        onCommand('clear');
+                        setInput('');
+                        return;
+                    } else if (command === '/help') {
+                        onCommand('help');
+                        setInput('');
+                        return;
+                    }
+                }
+
+                onSendMessage(text);
+                setInput('');
+                inputRef.current?.focus();
+            };
+
+            return (
+                <div className="border-t border-purple-600 pt-4">
+                    <input
+                        ref={inputRef}
+                        type="text"
+                        placeholder="Type message... (/ for commands)"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyPress={handleKeyPress}
+                        className="terminal-input w-full px-3 py-2 text-sm mb-2"
+                    />
+                    <button
+                        onClick={handleSubmit}
+                        className="button-primary w-full py-2 text-sm font-bold hover:bg-purple-600"
+                    >
+                        SEND (Enter)
+                    </button>
+                    <div className="command-hint text-xs mt-2">
+                        &gt; /help for commands
+                    </div>
+                </div>
+            );
+        }
+
+        function Chat({ user, onLogout }) {
+            const [selectedUser, setSelectedUser] = useState(null);
+            const [messages, setMessages] = useState([]);
+            const [userProfile, setUserProfile] = useState(null);
+            const [showHelp, setShowHelp] = useState(false);
+
+            useEffect(() => {
+                if (!db) return;
+                const userRef = db.collection('users').doc(user.uid);
+                userRef.get().then(doc => {
+                    if (doc.exists) {
+                        setUserProfile(doc.data());
+                    }
+                });
+            }, [user]);
+
+            useEffect(() => {
+                if (!selectedUser || !db) return;
+
+                const userIds = [user.uid, selectedUser.uid].sort();
+                const chatId = `${userIds[0]}_${userIds[1]}`;
+
+                const unsubscribe = db.collection('chats').doc(chatId)
+                    .collection('messages')
+                    .orderBy('createdAt', 'asc')
+                    .onSnapshot(snapshot => {
+                        const msgs = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data()
+                        }));
+                        setMessages(msgs);
+                    });
+
+                return () => unsubscribe();
+            }, [selectedUser, user.uid]);
+
+            const handleSendMessage = async (text) => {
+                if (!selectedUser || !db) return;
+
+                const userIds = [user.uid, selectedUser.uid].sort();
+                const chatId = `${userIds[0]}_${userIds[1]}`;
+
+                const message = {
+                    senderId: user.uid,
+                    text: text,
+                    status: 'sent',
+                    createdAt: new Date()
+                };
+
+                try {
+                    await db.collection('chats').doc(chatId)
+                        .collection('messages')
+                        .add(message);
+
+                    setTimeout(async () => {
+                        const snapshot = await db.collection('chats').doc(chatId)
+                            .collection('messages')
+                            .orderBy('createdAt', 'desc')
+                            .limit(1)
+                            .get();
+                        
+                        if (!snapshot.empty) {
+                            await snapshot.docs[0].ref.update({ status: 'delivered' });
+                        }
+                    }, 500);
+
+                    if (Notification.permission === 'granted') {
+                        new Notification(`Message sent to ${selectedUser.username}`);
+                    }
+                } catch (err) {
+                    console.error('Send error:', err);
+                }
+            };
+
+            const handleCommand = (command) => {
+                if (command === 'clear') {
+                    setMessages([]);
+                } else if (command === 'help') {
+                    setShowHelp(true);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-black text-terminal-lavender p-4">
+                    <div className="max-w-2xl mx-auto">
+                        <div className="terminal-border p-4 mb-4">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <h1 className="text-xl text-terminal-lavender mb-2 font-bold">
+                                        &gt; MINIMAL MESSAGING
+                                    </h1>
+                                    {userProfile && (
+                                        <div className="text-xs text-purple-400">
+                                            <p>&gt; USERNAME: {userProfile.username}</p>
+                                            <p>&gt; INVITE CODE: {userProfile.inviteCode}</p>
+                                        </div>
+                                    )}
+                                </div>
+                                <button
+                                    onClick={onLogout}
+                                    className="button-primary px-4 py-2 text-sm hover:bg-purple-600"
+                                >
+                                    LOGOUT
+                                </button>
+                            </div>
+                        </div>
+
+                        {!selectedUser && (
+                            <UserSearch
+                                currentUsername={userProfile?.username}
+                                onSelectUser={setSelectedUser}
+                            />
+                        )}
+
+                        {selectedUser && (
+                            <div className="terminal-border p-4">
+                                <div className="flex justify-between items-center mb-4">
+                                    <div className="text-sm text-terminal-lavender">
+                                        &gt; CHAT WITH: {selectedUser.username}
+                                    </div>
+                                    <button
+                                        onClick={() => setSelectedUser(null)}
+                                        className="button-primary px-3 py-1 text-xs hover:bg-purple-600"
+                                    >
+                                        CLOSE
+                                    </button>
+                                </div>
+
+                                <MessageList messages={messages} currentUserId={user.uid} />
+                                <InputBox onSendMessage={handleSendMessage} onCommand={handleCommand} />
+                            </div>
+                        )}
+
+                        {showHelp && (
+                            <div className="terminal-border p-4 mt-4">
+                                <div className="flex justify-between items-center mb-3">
+                                    <h2 className="text-terminal-lavender font-bold">&gt; COMMANDS</h2>
+                                    <button
+                                        onClick={() => setShowHelp(false)}
+                                        className="button-primary px-3 py-1 text-xs hover:bg-purple-600"
+                                    >
+                                        CLOSE
+                                    </button>
+                                </div>
+                                <div className="text-sm text-purple-400 space-y-2">
+                                    <p>&gt; /clear - Clear chat view</p>
+                                    <p>&gt; /help - Show this help</p>
+                                    <p>&gt; ENTER - Send message</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                if (!auth) {
+                    setLoading(false);
+                    return;
+                }
+
+                const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+                    setUser(currentUser);
+                    setLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if ('Notification' in window && Notification.permission === 'default') {
+                    Notification.requestPermission();
+                }
+            }, []);
+
+            if (loading) {
+                return (
+                    <div className="min-h-screen bg-black flex items-center justify-center text-terminal-lavender">
+                        <div className="text-center">
+                            <p className="text-xl mb-2">&gt; INITIALIZING...</p>
+                            <p className="text-sm text-purple-400">&gt; Please wait</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!user) {
+                return <Login onAuthSuccess={setUser} />;
+            }
+
+            return <Chat user={user} onLogout={() => setUser(null)} />;
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
